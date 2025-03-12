@@ -1,64 +1,66 @@
-// src/middleware.ts
+// middleware.ts
 import { NextResponse } from 'next/server';
-import { createMiddlewareClient } from '@supabase/auth-helpers-nextjs';
+import { createServerClient } from '@supabase/ssr';
 import type { NextRequest } from 'next/server';
 
 export async function middleware(req: NextRequest) {
-    console.log('Middleware invoked for:', req.nextUrl.pathname);
-    const res = NextResponse.next();
-    
-    try {
-        const supabase = createMiddlewareClient({ req, res });
-        
-        const {
-            data: { session },
-            error,
-        } = await supabase.auth.getSession();
-        
-        if (error) {
-            console.error('Error getting session in middleware:', error);
-        }
-        console.log('Full Session:', session);
-
-        console.log('Session:', session ? `User ID: ${session.user.id}` : 'No session');
-
-        // Check auth status
-        const isAuthPage = req.nextUrl.pathname.startsWith('/auth');
-        const isApiRoute = req.nextUrl.pathname.startsWith('/api');
-        const isPublicRoute = req.nextUrl.pathname === '/';
-        const isCallbackRoute = req.nextUrl.pathname === '/auth/callback' || 
-                               req.nextUrl.pathname === '/auth/oauth-callback';
-
-        console.log('Route checks:', { isAuthPage, isApiRoute, isPublicRoute, isCallbackRoute });
-
-        // Always allow callback routes to proceed
-        if (isCallbackRoute) {
-            console.log('Allowing callback route');
-            return res;
-        }
-
-        // Redirect unauthenticated users to auth page
-        if (!session && !isAuthPage && !isPublicRoute && !isApiRoute) {
-            console.log('Redirecting to /auth - No session');
-            const redirectUrl = new URL('/auth', req.url);
-            return NextResponse.redirect(redirectUrl);
-        }
-
-        // Redirect authenticated users away from auth page
-        if (session && isAuthPage && !isCallbackRoute) {
-            console.log('Redirecting to /dashboard - Has session');
-            const redirectUrl = new URL('/dashboard', req.url);
-            return NextResponse.redirect(redirectUrl);
-        }
-
-        return res;
-    } catch (err) {
-        console.error('Middleware exception:', err);
-        // Return the normal response on error to avoid breaking the app
-        return res;
+  const res = NextResponse.next();
+  
+  // Create a new supabase client for each request
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    {
+      cookies: {
+        get(name) {
+          return req.cookies.get(name)?.value;
+        },
+        set(name, value, options) {
+          res.cookies.set({
+            name,
+            value,
+            ...options,
+          });
+        },
+        remove(name, options) {
+          res.cookies.set({
+            name,
+            value: '',
+            ...options,
+            maxAge: 0,
+          });
+        },
+      },
     }
+  );
+
+  // Check auth status
+  const { data: { session }, error } = await supabase.auth.getSession();
+  
+  if (error) {
+    console.error('Middleware auth error:', error);
+  }
+
+  // Define route types
+  const isAuthPage = req.nextUrl.pathname.startsWith('/auth');
+  const isPublicPage = ['/', '/about', '/contact'].includes(req.nextUrl.pathname);
+  const isApiRoute = req.nextUrl.pathname.startsWith('/api');
+  const isCallbackRoute = req.nextUrl.pathname.includes('/auth/callback');
+
+  // Handle authenticated routes
+  if (!session && !isAuthPage && !isPublicPage && !isApiRoute && !isCallbackRoute) {
+    return NextResponse.redirect(new URL('/auth', req.url));
+  }
+
+  // Prevent authenticated users from accessing auth pages
+  if (session && isAuthPage && !isCallbackRoute) {
+    return NextResponse.redirect(new URL('/dashboard', req.url));
+  }
+
+  return res;
 }
 
+// Specify which routes middleware applies to
 export const config = {
-    matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'],
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|.*\\.svg).*)'],
 };

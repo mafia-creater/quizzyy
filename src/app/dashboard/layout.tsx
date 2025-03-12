@@ -4,7 +4,7 @@
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { supabase } from "@/lib/supabase";
+import { supabase } from "@/lib/supabase-browser";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -30,40 +30,57 @@ export default function DashboardLayout({
 
   useEffect(() => {
     const getUser = async () => {
-      const { data } = await supabase.auth.getUser();
-      setUser(data.user);
-      setLoading(false);
-    };
-
-    getUser();
-
-    const { data: authListener } = supabase.auth.onAuthStateChange(
-      (event, session) => {
-        if (event === "SIGNED_OUT") {
-          setUser(null);
-        } else if (event === "SIGNED_IN" && session) {
-          setUser(session.user);
+      try {
+        console.log("Checking auth status on dashboard...");
+        const { data, error } = await supabase.auth.getUser();
+  
+        if (error) {
+          console.error("Error getting user:", error);
+          return;
         }
+  
+        console.log("Auth user data:", data);
+        setUser(data.user);
+        setLoading(false);
+      } catch (err) {
+        console.error("Dashboard auth check error:", err);
+        setLoading(false);
       }
-    );
-
+    };
+  
+    getUser();
+  
+    const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "SIGNED_OUT") {
+        setUser(null);
+        router.push("/auth"); // Redirect to login page on sign-out
+      } else if (event === "SIGNED_IN" && session) {
+        setUser(session.user);
+      }
+    });
+  
     return () => {
-      authListener.subscription.unsubscribe();
+      authListener.subscription?.unsubscribe?.(); // Ensure cleanup
     };
   }, []);
+  
 
   const handleSignOut = async () => {
     setIsSigningOut(true);
     try {
-      await supabase.auth.signOut();
+      const { error } = await supabase.auth.signOut();
+      if (error) throw error;
+      setUser(null); // Clear user state
       toast.success("You have been successfully signed out.");
-      router.push("/auth");
+      router.push("/auth"); // Redirect after sign out
     } catch (error) {
+      console.error("Sign-out error:", error);
       toast.error("Failed to sign out. Please try again.");
     } finally {
       setIsSigningOut(false);
     }
   };
+  
 
   const initials = user?.email
     ? user.email.substring(0, 2).toUpperCase()

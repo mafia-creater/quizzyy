@@ -1,33 +1,47 @@
-// src/app/auth/page.tsx
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { supabase } from "@/lib/supabase";
+import { supabase } from "@/lib/supabase-browser";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Loader2 } from "lucide-react";
 
 export default function AuthPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isLogin, setIsLogin] = useState(true);
+  const [sessionChecked, setSessionChecked] = useState(false);
   const router = useRouter();
-  const searchParams = useSearchParams();
   
-  // Handle error messages from redirects
+  // Check if already authenticated
   useEffect(() => {
-    const error = searchParams?.get('error');
-    const message = searchParams?.get('message');
+    const checkSession = async () => {
+      try {
+        const { data, error } = await supabase.auth.getSession();
+        
+        if (error) {
+          console.error("Session check error:", error);
+          return;
+        }
+        
+        if (data.session) {
+          console.log("User already has a session, redirecting to dashboard");
+          router.push("/dashboard");
+        }
+      } catch (err) {
+        console.error("Session check failed:", err);
+      } finally {
+        setSessionChecked(true);
+      }
+    };
     
-    if (error) {
-      console.error('Auth error:', error, message);
-      toast.error(message || `Authentication error: ${error}`);
-    }
-  }, [searchParams]);
+    checkSession();
+  }, [router]);
 
   const handleEmailAuth = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -35,8 +49,7 @@ export default function AuthPage() {
 
     try {
       if (isLogin) {
-        console.log("Attempting to sign in with email:", email);
-        
+        // Sign in with email/password
         const { data, error } = await supabase.auth.signInWithPassword({
           email,
           password,
@@ -44,56 +57,55 @@ export default function AuthPage() {
 
         if (error) throw error;
         
-        console.log("Sign in response:", data);
-        
-        if (data.session) {
-          toast.success("Welcome back! You've been successfully logged in.");
-          router.push("/dashboard");
-        } else {
-          throw new Error("Failed to establish session");
-        }
+        toast.success("Successfully signed in!");
+        router.push("/dashboard");
+        router.refresh(); // Force a refresh to update server components
       } else {
+        // Validate password
         if (password.length < 6) {
           toast.error("Password must be at least 6 characters long.");
+          setIsLoading(false);
           return;
         }
 
-        console.log("Attempting to sign up with email:", email);
-        
-        // For signup, use our client-side callback page
-        const redirectTo = `${window.location.origin}/auth/oauth-callback`;
-        console.log("Using redirect URL for signup:", redirectTo);
-        
+        // Sign up new user
         const { data, error } = await supabase.auth.signUp({
           email,
           password,
           options: {
-            emailRedirectTo: redirectTo,
+            emailRedirectTo: `${window.location.origin}/auth/callback`,
           },
         });
 
         if (error) throw error;
         
-        console.log("Sign up response:", data);
-        
-        // Handle different sign-up scenarios
-        if (data.user?.identities?.length === 0) {
-          toast.error("This email is already registered. Please sign in instead.");
-          setIsLogin(true);
-        } else if (data.user && !data.session) {
+        // Check if email confirmation is needed
+        if (data.user && !data.session) {
           toast.success(
-            "Check your email. We've sent you a confirmation link to complete your registration.",
+            "Check your email for a confirmation link to complete your registration.",
             { duration: 6000 }
           );
         } else if (data.session) {
-          // User was auto-confirmed
-          router.push("/dashboard");
+          // Auto-confirmed (development or email confirmation disabled)
           toast.success("Account created successfully!");
+          router.push("/dashboard");
+          router.refresh();
         }
       }
     } catch (error: any) {
       console.error("Authentication error:", error);
-      toast.error("Authentication error: " + error.message);
+  const errorMsg = error.message.toLowerCase();
+
+  if (errorMsg.includes("invalid login credentials")) {
+    toast.error("Invalid email or password. Please try again.");
+  } else if (errorMsg.includes("email not confirmed")) {
+    toast.error("Please check your email to confirm your account before signing in.");
+  } else if (errorMsg.includes("already registered")) {
+    toast.error("This email is already registered. Please sign in instead.");
+    setIsLogin(true);
+  } else {
+    toast.error(error.message);
+  }
     } finally {
       setIsLoading(false);
     }
@@ -102,40 +114,30 @@ export default function AuthPage() {
   const handleGoogleAuth = async () => {
     setIsLoading(true);
     try {
-      // Use the client-side callback for Google auth
-      const redirectTo = `${window.location.origin}/auth/oauth-callback`;
-
-      console.log("Using redirect URL for Google:", redirectTo);
-      
-      const { data, error } = await supabase.auth.signInWithOAuth({
+      const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
         options: {
-          redirectTo: redirectTo,
+          redirectTo: `${window.location.origin}/auth/callback`,
         },
       });
 
       if (error) throw error;
-      
-      console.log("Google auth initiated:", data);
+      // Redirect handled by Supabase OAuth
     } catch (error: any) {
       console.error("Google sign-in error:", error);
-      toast.error("Google sign-in error: " + error.message);
+      toast.error(error.message);
       setIsLoading(false);
     }
   };
 
-  // Check if already authenticated
-  useEffect(() => {
-    const checkSession = async () => {
-      const { data } = await supabase.auth.getSession();
-      if (data.session) {
-        console.log("User already has a session, redirecting to dashboard");
-        router.push("/dashboard");
-      }
-    };
-    
-    checkSession();
-  }, [router]);
+  // Don't render until we've checked for an existing session
+  if (!sessionChecked) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-slate-600" />
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-gradient-to-b from-slate-50 to-slate-100 p-4">
@@ -165,6 +167,7 @@ export default function AuthPage() {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   required
+                  disabled={isLoading}
                 />
               </div>
               <div className="space-y-2">
@@ -176,10 +179,18 @@ export default function AuthPage() {
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   required
+                  disabled={isLoading}
                 />
               </div>
               <Button type="submit" className="w-full" disabled={isLoading}>
-                {isLoading ? "Loading..." : isLogin ? "Sign in" : "Sign up"}
+                {isLoading ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    {isLogin ? "Signing in..." : "Signing up..."}
+                  </>
+                ) : (
+                  isLogin ? "Sign in" : "Sign up"
+                )}
               </Button>
             </form>
             
@@ -196,21 +207,25 @@ export default function AuthPage() {
               disabled={isLoading}
               aria-label="Continue with Google"
             >
-              <svg
-                className="mr-2 h-4 w-4"
-                aria-hidden="true"
-                focusable="false"
-                data-prefix="fab"
-                data-icon="google"
-                role="img"
-                xmlns="http://www.w3.org/2000/svg"
-                viewBox="0 0 488 512"
-              >
-                <path
-                  fill="currentColor"
-                  d="M488 261.8C488 403.3 391.1 504 248 504 110.8 504 0 393.2 0 256S110.8 8 248 8c66.8 0 123 24.5 166.3 64.9l-67.5 64.9C258.5 52.6 94.3 116.6 94.3 256c0 86.5 69.1 156.6 153.7 156.6 98.2 0 135-70.4 140.8-106.9H248v-85.3h236.1c2.3 12.7 3.9 24.9 3.9 41.4z"
-                ></path>
-              </svg>
+              {isLoading ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <svg
+                  className="mr-2 h-4 w-4"
+                  aria-hidden="true"
+                  focusable="false"
+                  data-prefix="fab"
+                  data-icon="google"
+                  role="img"
+                  xmlns="http://www.w3.org/2000/svg"
+                  viewBox="0 0 488 512"
+                >
+                  <path
+                    fill="currentColor"
+                    d="M488 261.8C488 403.3 391.1 504 248 504 110.8 504 0 393.2 0 256S110.8 8 248 8c66.8 0 123 24.5 166.3 64.9l-67.5 64.9C258.5 52.6 94.3 116.6 94.3 256c0 86.5 69.1 156.6 153.7 156.6 98.2 0 135-70.4 140.8-106.9H248v-85.3h236.1c2.3 12.7 3.9 24.9 3.9 41.4z"
+                  ></path>
+                </svg>
+              )}
               Continue with Google
             </Button>
           </CardContent>
@@ -219,6 +234,7 @@ export default function AuthPage() {
               variant="link"
               className="w-full"
               onClick={() => setIsLogin(!isLogin)}
+              disabled={isLoading}
             >
               {isLogin ? "Don't have an account? Sign up" : "Already have an account? Sign in"}
             </Button>
